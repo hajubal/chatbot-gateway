@@ -10,7 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import reactor.core.publisher.Mono;
 
 @Slf4j
-@Configuration
+//@Configuration
 public class OllamaGatewayConfig {
 
   @Value("${host.url}")
@@ -33,12 +33,12 @@ public class OllamaGatewayConfig {
                 return Mono.just(body);
               });
 
-              f.modifyResponseBody(String.class, String.class, (exchange, body) -> {
-
-                log.info("Response body: {}", body);
-
-                return Mono.just(body);
-              });
+//              f.modifyResponseBody(String.class, String.class, (exchange, body) -> {
+//
+//                log.info("Response body: {}", body);
+//
+//                return Mono.just(body);
+//              });
 
               return f;
             })

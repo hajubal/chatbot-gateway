@@ -1,7 +1,19 @@
 spring:
   application:
     name: gateway
+#  cloud:
+#    gateway:
+#      routes:
+#        - id: test_route
+#          uri: http://localhost:11434
+#          predicates:
+#            - Path=/api/*
+#          filters:
+#            - name: Test2Filter
 
 host:
   url: http://localhost:11434
 
+logging:
+  level:
+    org.springframework.cloud.gateway: TRACE
