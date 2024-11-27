@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: gateway
+
+host:
+  url: http://localhost:11434
+
