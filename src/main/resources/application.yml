@@ -17,3 +17,4 @@ host:
 logging:
   level:
     org.springframework.cloud.gateway: TRACE
+    com.chatbot.gateway: TRACE
