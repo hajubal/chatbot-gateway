@@ -5,6 +5,7 @@ import static org.springframework.cloud.gateway.support.ServerWebExchangeUtils.C
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -13,7 +14,9 @@ import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.core.io.buffer.NettyDataBufferFactory;
+import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
@@ -27,8 +30,11 @@ import reactor.netty.Connection;
 @Component
 public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoGatewayFilterFactory.Config> {
 
-  public CryptoGatewayFilterFactory() {
+  private final List<MediaType> streamingMediaTypes;
+
+  public CryptoGatewayFilterFactory(List<MediaType> streamingMediaTypes) {
     super(Config.class);
+    this.streamingMediaTypes = streamingMediaTypes;
   }
 
   @Override
@@ -47,15 +53,16 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
   public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
     return chain.filter(exchange)
         .then(Mono.defer(() -> {
-          log.info("call. 1");
           Connection connection = exchange.getAttribute(CLIENT_RESPONSE_CONN_ATTR);
 
           if (connection == null) {
             return Mono.empty();
           }
-
-          log.info("call. 2");
-
+          if (log.isTraceEnabled()) {
+            log.trace("NettyWriteResponseFilter start inbound: "
+                + connection.channel().id().asShortText() + ", outbound: "
+                + exchange.getLogPrefix());
+          }
           ServerHttpResponse response = exchange.getResponse();
 
           final Flux<DataBuffer> body = connection
@@ -78,9 +85,32 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
 
           log.info("call. 3");
 
-          return response.writeAndFlushWith(body.map(Flux::just));
+          MediaType contentType = null;
+          try {
+            contentType = response.getHeaders().getContentType();
+          }
+          catch (Exception e) {
+            if (log.isTraceEnabled()) {
+              log.trace("invalid media type", e);
+            }
+          }
+
+          return (isStreamingMediaType(contentType)
+              ? response.writeAndFlushWith(body.map(Flux::just))
+              : response.writeWith(body));
         })).doOnCancel(() -> cleanup(exchange))
         .doOnError(throwable -> cleanup(exchange));
+  }
+
+  private boolean isStreamingMediaType(@Nullable MediaType contentType) {
+    if (contentType != null) {
+      for (int i = 0; i < streamingMediaTypes.size(); i++) {
+        if (streamingMediaTypes.get(i).isCompatibleWith(contentType)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   protected DataBuffer wrap(ByteBuf byteBuf, ServerHttpResponse response) {
