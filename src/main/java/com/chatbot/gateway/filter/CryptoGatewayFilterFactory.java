@@ -59,7 +59,7 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
             return Mono.empty();
           }
           if (log.isTraceEnabled()) {
-            log.trace("NettyWriteResponseFilter start inbound: "
+            log.trace("CryptoGatewayFilterFactory start inbound: "
                 + connection.channel().id().asShortText() + ", outbound: "
                 + exchange.getLogPrefix());
           }
@@ -69,15 +69,14 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
               .inbound()
               .receive()
               .retain()
-//              .map(byteBuf -> wrap(byteBuf, response));
-              .map(byteBuf -> {
+//              .map(byteBuf -> wrap(byteBuf, response)); //direct pass.
+              .map(byteBuf -> { //data modify
                 // Netty ByteBuf -> String 변환
                 String original = byteBuf.toString(StandardCharsets.UTF_8);
-//                log.info("Original Response Body: {}", original);
+                log.info("Original Response Body: {}", original);
 
                 // 데이터 변조
-                String modified = original.replace("apple", "got");
-                log.info("Modified Response Body: {}", modified);
+                String modified = original.toLowerCase().replace("apple", "got");
 
                 // String -> DataBuffer 변환
                 return wrap(Unpooled.copiedBuffer(modified, StandardCharsets.UTF_8), response);
