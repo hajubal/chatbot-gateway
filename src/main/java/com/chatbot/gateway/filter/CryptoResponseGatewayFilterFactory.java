@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
+import org.springframework.core.Ordered;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
@@ -25,19 +26,24 @@ import reactor.core.publisher.Mono;
 import reactor.netty.Connection;
 
 /**
- * 속도가 엄청 느려짐.... 왠지 다 받고 내려주는듯?
+ * ollama -> gateway -> streamlit
+ *
+ * gateway 에서 response encrypt 해서 streamlit으로 내려줌
  */
 @Slf4j
 @Component
-public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoGatewayFilterFactory.Config> {
+public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoResponseGatewayFilterFactory.Config>
+implements Ordered {
 
   private final List<MediaType> streamingMediaTypes;
 
-  public final CryptoUtil cryptoUtil;
+  private final CryptoUtil cryptoUtil;
 
   boolean isEncrypt = true;
 
-  public CryptoGatewayFilterFactory(List<MediaType> streamingMediaTypes) {
+  String lineSeparator = "\n";
+
+  public CryptoResponseGatewayFilterFactory(List<MediaType> streamingMediaTypes) {
     super(Config.class);
     this.streamingMediaTypes = streamingMediaTypes;
     this.cryptoUtil = new CryptoUtil("my_very_secret_key_32_bytes_long");
@@ -46,10 +52,10 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
   @Override
   public GatewayFilter apply(Config config) {
 
-    log.info("Init Test2Filter.");
+    log.info("Init CryptoResponseGatewayFilterFactory.");
 
     return (exchange, chain) -> {
-      log.info("Call Test2Filter.");
+      log.info("Call CryptoResponseGatewayFilter.");
       // 변경된 응답 객체로 교체
       return filter(exchange, chain);
     };
@@ -83,7 +89,7 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
               .map(byteBuf -> { //data modify
                 // Netty ByteBuf -> String 변환
                 String original = byteBuf.toString(StandardCharsets.UTF_8);
-                log.trace("Original Response Body: {}", original);
+                log.trace("Original Response Body: '{}'", original);
 
                 String modified = "";
 
@@ -93,31 +99,34 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
                 // 데이터 암호화
                 try {
                   if(isEncrypt) {
-                    log.info("Original Response Encrypted.");
-
                     long start = System.currentTimeMillis();
 
-                    //LLM으로 부터 캐리지 리턴이 있는 경우 암호화 문자열에서는 제거
-                    if(original.endsWith(System.lineSeparator())) {
+                    log.trace("Buffered string: '{}'", sb);
+
+                    //ollama으로 부터 캐리지 리턴이 있는 경우 암호화 문자열에서는 제거, ollama는 '\n' 으로 구분함
+                    if(original.endsWith(lineSeparator)) {
+                      log.trace("Contain line separator.");
 
                       if(!sb.isEmpty()) {
                         original = sb + original;
                         sb.setLength(0);
                       }
 
-                      modified = cryptoUtil.encrypt(removeLineSeparator(original)) + System.lineSeparator();
+                      modified = cryptoUtil.encrypt(removeLineSeparator(original)) + lineSeparator;
                     } else {
-//                      modified = cryptoUtil.encrypt(original);
+                      log.trace("Not contain line separator.");
+
                       sb.append(original);
 
-                      wrap(Unpooled.copiedBuffer("", StandardCharsets.UTF_8), response);
+                      //문자열 끝이 캐리지 리턴이 없는 경우 ollama 로 부터 캐리지 리턴이 포함 될 때까지 client 에는 빈문자열을 내림
+                      return wrap(Unpooled.copiedBuffer("", StandardCharsets.UTF_8), response);
                     }
 
                     long end = System.currentTimeMillis();
 
                     log.trace("Encrypted Time: {} ms", end - start);
 
-                    log.debug("Encrypted Response Body: {}", modified);
+                    log.debug("Encrypted Response Body: '{}'", modified);
                   } else {
                     modified = original;
                   }
@@ -128,13 +137,11 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
                   throw new RuntimeException(e);
                 }
 
-                //TODO: data buffer 추가
+                //TODO: Need data buffer
 
                 // String -> DataBuffer 변환
                 return wrap(Unpooled.copiedBuffer(modified, StandardCharsets.UTF_8), response);
               });
-
-          log.info("call. 3");
 
           MediaType contentType = null;
           try {
@@ -153,8 +160,8 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
         .doOnError(throwable -> cleanup(exchange));
   }
 
-  private static String removeLineSeparator(String original) {
-    return original.substring(0, original.lastIndexOf(System.lineSeparator()));
+  private String removeLineSeparator(String original) {
+    return original.substring(0, original.lastIndexOf(lineSeparator));
   }
 
   private boolean isStreamingMediaType(@Nullable MediaType contentType) {
@@ -189,6 +196,11 @@ public class CryptoGatewayFilterFactory extends AbstractGatewayFilterFactory<Cry
     if (connection != null && connection.channel().isActive()) {
       connection.dispose();
     }
+  }
+
+  @Override
+  public int getOrder() {
+    return Ordered.LOWEST_PRECEDENCE;
   }
 
   public static class Config {

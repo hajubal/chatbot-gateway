@@ -1,32 +1,28 @@
 package com.chatbot.gateway.filter;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
+import org.springframework.core.Ordered;
 import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferFactory;
-import org.springframework.core.io.buffer.DataBufferUtils;
-import org.springframework.core.io.buffer.DefaultDataBufferFactory;
-import org.springframework.core.io.buffer.NettyDataBufferFactory;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
-import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.Base64;
-import java.util.List;
 
+/**
+ * streamlit -> gateway -> ollama
+ *
+ * streamlit 에서 암호화되어 올라온 메시지를 복호화 해서 ollama에 전달함
+ */
 @Slf4j
 @Component
-public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoRequestGatewayFilterFactory.Config> {
+public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoRequestGatewayFilterFactory.Config>
+implements Ordered {
 
   public CryptoRequestGatewayFilterFactory() {
     super(Config.class);
@@ -34,7 +30,12 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
 
   @Override
   public GatewayFilter apply(Config config) {
+
+    log.info("Init CryptoRequestGatewayFilterFactory.");
+
     return (exchange, chain) -> {
+      log.info("Call CryptoRequestGatewayFilter.");
+
       // 요청 본문 변형 로직
         return exchange.getRequest().getBody()
                 .collectList() // Body 데이터를 DataBuffer 리스트로 수집
@@ -48,11 +49,12 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
                     });
 
                     String originalBody = bodyBuilder.toString();
-                    log.info("Original Body: {}", originalBody);
+                    log.debug("Original Body: {}", originalBody);
 
                     // Request Body 암호화 (예: 단순 Base64 암호화)
-                    String encryptedBody = Base64.getEncoder().encodeToString(originalBody.getBytes(StandardCharsets.UTF_8));
-                    log.info("Encrypted Body: {}", encryptedBody);
+//                    String encryptedBody = Base64.getEncoder().encodeToString(originalBody.getBytes(StandardCharsets.UTF_8));
+                    String encryptedBody = originalBody;
+                    log.debug("Encrypted Body: {}", encryptedBody);
 
                     // 새로운 Request Body 작성
                     byte[] newBodyBytes = encryptedBody.getBytes(StandardCharsets.UTF_8);
@@ -80,6 +82,12 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
                 });
     };
   }
+
+  @Override
+  public int getOrder() {
+    return Ordered.HIGHEST_PRECEDENCE;
+  }
+
   public static class Config {
     // 설정 추가가 필요하다면 여기에 정의
   }
