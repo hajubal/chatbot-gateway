@@ -8,6 +8,7 @@ import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
@@ -33,13 +34,14 @@ import reactor.netty.Connection;
 @Slf4j
 @Component
 public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoResponseGatewayFilterFactory.Config>
-implements Ordered {
+        implements Ordered {
 
   private final List<MediaType> streamingMediaTypes;
 
   private final CryptoUtil cryptoUtil;
 
-  boolean isEncrypt = true;
+  @Value("${app.message.encrypted:false}")
+  private boolean isEncrypt;
 
   String lineSeparator = "\n";
 
@@ -93,9 +95,6 @@ implements Ordered {
 
                 String modified = "";
 
-                // 데이터 변조
-//                modified = original.toLowerCase().replace("apple", "got");
-
                 // 데이터 암호화
                 try {
                   if(isEncrypt) {
@@ -124,9 +123,9 @@ implements Ordered {
 
                     long end = System.currentTimeMillis();
 
-                    log.trace("Encrypted Time: {} ms", end - start);
+                    log.trace("Encrypted time: {} ms", end - start);
 
-                    log.debug("Encrypted Response Body: '{}'", modified);
+                    log.debug("Encrypted response body: '{}'", modified);
                   } else {
                     modified = original;
                   }

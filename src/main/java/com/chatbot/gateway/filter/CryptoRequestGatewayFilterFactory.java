@@ -1,6 +1,8 @@
 package com.chatbot.gateway.filter;
 
+import com.chatbot.gateway.util.CryptoUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
 import org.springframework.core.Ordered;
@@ -22,10 +24,17 @@ import java.util.Base64;
 @Slf4j
 @Component
 public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoRequestGatewayFilterFactory.Config>
-implements Ordered {
+        implements Ordered {
+
+  private final CryptoUtil cryptoUtil;
+
+  @Value("${app.message.encrypted:false}")
+  private boolean isEncrypt;
 
   public CryptoRequestGatewayFilterFactory() {
     super(Config.class);
+
+    this.cryptoUtil = new CryptoUtil("my_very_secret_key_32_bytes_long");
   }
 
   @Override
@@ -49,15 +58,25 @@ implements Ordered {
                     });
 
                     String originalBody = bodyBuilder.toString();
-                    log.debug("Original Body: {}", originalBody);
+                    log.debug("Original request body: {}", originalBody);
 
-                    // Request Body 암호화 (예: 단순 Base64 암호화)
-//                    String encryptedBody = Base64.getEncoder().encodeToString(originalBody.getBytes(StandardCharsets.UTF_8));
-                    String encryptedBody = originalBody;
-                    log.debug("Encrypted Body: {}", encryptedBody);
+                    String decryptedBody = null;
+
+                    if(isEncrypt) {
+                      // Request Body 암호화
+                      try {
+                        decryptedBody = cryptoUtil.decrypt(originalBody);
+                      } catch (Exception e) {
+                        log.error(e.getMessage(), e);
+                        throw new RuntimeException(e);
+                      }
+                      log.debug("Decrypted request body: {}", decryptedBody);
+                    } else {
+                      decryptedBody = originalBody;
+                    }
 
                     // 새로운 Request Body 작성
-                    byte[] newBodyBytes = encryptedBody.getBytes(StandardCharsets.UTF_8);
+                    byte[] newBodyBytes = decryptedBody.getBytes(StandardCharsets.UTF_8);
                     DataBuffer newBodyDataBuffer = exchange.getResponse()
                             .bufferFactory()
                             .wrap(newBodyBytes);

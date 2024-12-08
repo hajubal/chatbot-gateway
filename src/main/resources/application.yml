@@ -14,6 +14,10 @@ spring:
 host:
   url: http://localhost:11434
 
+app:
+  message:
+    encrypted: true
+
 logging:
   level:
     org.springframework.cloud.gateway: TRACE
