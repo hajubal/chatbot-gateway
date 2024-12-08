@@ -2,6 +2,8 @@ package com.chatbot.gateway.config;
 
 import com.chatbot.gateway.filter.CryptoGatewayFilterFactory;
 import java.security.NoSuchAlgorithmException;
+
+import com.chatbot.gateway.filter.CryptoRequestGatewayFilterFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.route.RouteLocator;
@@ -16,15 +18,17 @@ public class GatewayConfig {
   private String hostUrl;
 
   @Bean
-  RouteLocator testRoutes(RouteLocatorBuilder builder, CryptoGatewayFilterFactory cryptoFilter) {
-    CryptoGatewayFilterFactory.Config config = new CryptoGatewayFilterFactory.Config();
+  RouteLocator testRoutes(RouteLocatorBuilder builder, CryptoGatewayFilterFactory cryptoFilter
+          , CryptoRequestGatewayFilterFactory requestFilterFactory) {
 
-    GatewayFilter gatewayFilter = cryptoFilter.apply(config);
+    GatewayFilter gatewayFilter = cryptoFilter.apply(new CryptoGatewayFilterFactory.Config());
+    GatewayFilter requestFilter = requestFilterFactory.apply(new CryptoRequestGatewayFilterFactory.Config());
+
     return builder
         .routes()
         .route(predicateSpec -> predicateSpec
             .path("/api/chat")
-            .filters(spec -> spec.filter(gatewayFilter))
+            .filters(spec -> spec.filters(gatewayFilter, requestFilter))
             .uri(hostUrl))
         .build();
   }
