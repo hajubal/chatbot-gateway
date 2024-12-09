@@ -1,4 +1,6 @@
 spring:
+  profiles:
+    default: dev
   application:
     name: gateway
 #  cloud:
@@ -15,8 +17,13 @@ host:
   url: http://localhost:11434
 
 app:
+  server:
+    lineseparator: "\n"
   message:
     encrypted: true
+    enc_key: "my_very_secret_key_32_bytes_long"
+    logging:
+      level: INFO
 
 logging:
   level:

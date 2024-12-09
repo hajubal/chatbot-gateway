@@ -1,7 +1,10 @@
 package com.chatbot.gateway.filter;
 
 import com.chatbot.gateway.util.CryptoUtil;
+import java.nio.charset.StandardCharsets;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
@@ -12,9 +15,7 @@ import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import reactor.core.publisher.Mono;
 
 /**
  * streamlit -> gateway -> ollama
@@ -25,16 +26,17 @@ import java.util.Base64;
 @Component
 public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoRequestGatewayFilterFactory.Config>
         implements Ordered {
+  Logger timeLog = LoggerFactory.getLogger("time");
 
   private final CryptoUtil cryptoUtil;
 
   @Value("${app.message.encrypted:false}")
   private boolean isEncrypt;
 
-  public CryptoRequestGatewayFilterFactory() {
+  public CryptoRequestGatewayFilterFactory(@Value("${app.message.enc_key}") String encKey) {
     super(Config.class);
 
-    this.cryptoUtil = new CryptoUtil("my_very_secret_key_32_bytes_long");
+    this.cryptoUtil = new CryptoUtil(encKey);
   }
 
   @Override
@@ -63,14 +65,23 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
                     String decryptedBody = null;
 
                     if(isEncrypt) {
+                      timeLog.trace("Decrypted request body: {}", originalBody);
+
+                      long start = System.nanoTime();
+
                       // Request Body 암호화
                       try {
                         decryptedBody = cryptoUtil.decrypt(originalBody);
                       } catch (Exception e) {
                         log.error(e.getMessage(), e);
-                        throw new RuntimeException(e);
+                        return Mono.error(new IllegalArgumentException(e));
                       }
+
                       log.debug("Decrypted request body: {}", decryptedBody);
+
+                      timeLog.info("Decrypted time(ms): {}, content length: {}"
+                          , (System.nanoTime() - start) / 1_000_000.0
+                          , originalBody.length());
                     } else {
                       decryptedBody = originalBody;
                     }
