@@ -3,6 +3,8 @@ package com.chatbot.gateway.filter;
 import com.chatbot.gateway.dto.MessageDto;
 import com.chatbot.gateway.util.CryptoUtil;
 import com.chatbot.gateway.util.SignUtil;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
@@ -18,7 +20,6 @@ import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 /**
  * streamlit -> gateway -> ollama
@@ -36,13 +37,17 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
 
   private final SignUtil signUtil;
 
-  public CryptoRequestGatewayFilterFactory(@Value("${app.message.enc_key}") String encKey
+  private final MeterRegistry meterRegistry;
+
+  public CryptoRequestGatewayFilterFactory(MeterRegistry meterRegistry
+      , @Value("${app.message.enc_key}") String encKey
       , @Value("${app.message.private_key}") String privateKey
       , @Value("${app.message.public_key}") String publicKey) {
     super(Config.class);
 
     this.cryptoUtil = new CryptoUtil(encKey);
     this.signUtil = new SignUtil(privateKey, publicKey);
+    this.meterRegistry = meterRegistry;
   }
 
   @Override
@@ -103,6 +108,7 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
     String requestBody = "";
 
     long start = System.nanoTime();
+    Timer.Sample sample = Timer.start(meterRegistry);
 
     if(messageDto.isSigned()) {
       try {
@@ -135,6 +141,16 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
         , (System.nanoTime() - start) / 1_000_000.0
         , messageDto.getMessage().length());
 
+//    meterRegistry.gauge("gateway.request.processing.time"
+//        , (System.nanoTime() - start) / 1_000_000.0);
+
+    sample.stop(
+        Timer.builder("gateway.request.processing.time")
+            .register(meterRegistry)
+    );
+
+    meterRegistry.gauge("gateway.request.content.length", messageDto.getMessage().length());
+
     return requestBody;
   }
 
@@ -155,7 +171,7 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
 
   @Override
   public int getOrder() {
-    return Ordered.HIGHEST_PRECEDENCE;
+    return 1;
   }
 
   public static class Config {

@@ -5,6 +5,9 @@ import static org.springframework.cloud.gateway.support.ServerWebExchangeUtils.C
 import com.chatbot.gateway.dto.MessageDto;
 import com.chatbot.gateway.util.CryptoUtil;
 import com.chatbot.gateway.util.SignUtil;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.Timer;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
@@ -57,7 +60,10 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
   @Value("${app.server.lineseparator:\n}")
   private String lineSeparator;
 
+  private final MeterRegistry meterRegistry;
+
   public CryptoResponseGatewayFilterFactory(List<MediaType> streamingMediaTypes
+      , MeterRegistry meterRegistry
       , @Value("${app.message.enc_key}") String encKey
       , @Value("${app.message.private_key}") String privateKey
       , @Value("${app.message.public_key}") String publicKey
@@ -66,6 +72,7 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
     this.streamingMediaTypes = streamingMediaTypes;
     this.cryptoUtil = new CryptoUtil(encKey);
     this.signUtil = new SignUtil(privateKey, publicKey);
+    this.meterRegistry = meterRegistry;
   }
 
   @Override
@@ -175,6 +182,9 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
 
     String encryptedData = original;
 
+    long start = System.nanoTime();
+    Timer.Sample sample = Timer.start(meterRegistry);
+
     // 데이터 암호화
     if(isEncrypt) {
       encryptedData = encryptData(original);
@@ -185,6 +195,21 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
     if(isSign) {
       signature = signData(encryptedData);
     }
+
+    timeLog.info("Encrypted time(ms): {}, content size: {}"
+        , (System.nanoTime() - start) / 1_000_000.0
+        , original.length());
+
+//    Timer.builder("gateway.response.processing.time")
+//        .register(meterRegistry)
+//        .record(() -> (System.nanoTime() - start) / 1_000_000.0);
+    sample.stop(
+        Timer.builder("gateway.response.processing.time")
+            .register(meterRegistry)
+    );
+
+    meterRegistry.gauge("gateway.response.content.length",
+        original.length());
 
     MessageDto messageDto = new MessageDto();
     messageDto.setEncrypted(isEncrypt);
@@ -205,15 +230,9 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
 
   private String encryptData(String original) {
     try {
-        long start = System.nanoTime();
-
         timeLog.trace("Original: '{}'", original);
 
         String modified = cryptoUtil.encrypt(removeLineSeparator(original));
-
-        timeLog.info("Encrypted time(ms): {}, content size: {}"
-            , (System.nanoTime() - start) / 1_000_000.0
-            , original.length());
 
         log.debug("Encrypted response body: '{}'", modified);
 
@@ -265,7 +284,7 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
 
   @Override
   public int getOrder() {
-    return Ordered.LOWEST_PRECEDENCE;
+    return 2;
   }
 
   public static class Config {

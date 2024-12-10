@@ -28,7 +28,22 @@ app:
     logging:
       level: INFO
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus,health,info,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
 logging:
   level:
-    org.springframework.cloud.gateway: TRACE
-    com.chatbot.gateway: TRACE
+    org.springframework.cloud.gateway: ERROR
+    com.chatbot.gateway: INFO
+    root: INFO
