@@ -1,7 +1,10 @@
 package com.chatbot.gateway.filter;
 
+import com.chatbot.gateway.dto.MessageDto;
 import com.chatbot.gateway.util.CryptoUtil;
+import com.chatbot.gateway.util.SignUtil;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,17 +29,20 @@ import reactor.core.publisher.Mono;
 @Component
 public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFactory<CryptoRequestGatewayFilterFactory.Config>
         implements Ordered {
+
   Logger timeLog = LoggerFactory.getLogger("time");
 
   private final CryptoUtil cryptoUtil;
 
-  @Value("${app.message.encrypted:false}")
-  private boolean isEncrypt;
+  private final SignUtil signUtil;
 
-  public CryptoRequestGatewayFilterFactory(@Value("${app.message.enc_key}") String encKey) {
+  public CryptoRequestGatewayFilterFactory(@Value("${app.message.enc_key}") String encKey
+      , @Value("${app.message.private_key}") String privateKey
+      , @Value("${app.message.public_key}") String publicKey) {
     super(Config.class);
 
     this.cryptoUtil = new CryptoUtil(encKey);
+    this.signUtil = new SignUtil(privateKey, publicKey);
   }
 
   @Override
@@ -51,66 +57,100 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
         return exchange.getRequest().getBody()
                 .collectList() // Body 데이터를 DataBuffer 리스트로 수집
                 .flatMap(dataBuffers -> {
-                    // Body 내용을 문자열로 변환
-                    StringBuilder bodyBuilder = new StringBuilder();
-                    dataBuffers.forEach(dataBuffer -> {
-                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
-                        dataBuffer.read(bytes);
-                        bodyBuilder.append(new String(bytes, StandardCharsets.UTF_8));
-                    });
 
-                    String originalBody = bodyBuilder.toString();
-                    log.debug("Original request body: {}", originalBody);
+                  // Body 내용을 문자열로 변환
+                  MessageDto messageDto = getBody(dataBuffers);
 
-                    String decryptedBody = null;
+                  log.debug("Original request: {}", messageDto);
 
-                    if(isEncrypt) {
-                      timeLog.trace("Decrypted request body: {}", originalBody);
+                  //message 처리(서명 검증, 복호화)
+                  String requestBody = messageHandle(messageDto);
 
-                      long start = System.nanoTime();
+                  // 새로운 Request Body 작성
+                  ServerWebExchange mutatedExchange = getServerWebExchange(exchange, requestBody);
 
-                      // Request Body 암호화
-                      try {
-                        decryptedBody = cryptoUtil.decrypt(originalBody);
-                      } catch (Exception e) {
-                        log.error(e.getMessage(), e);
-                        return Mono.error(new IllegalArgumentException(e));
-                      }
-
-                      log.debug("Decrypted request body: {}", decryptedBody);
-
-                      timeLog.info("Decrypted time(ms): {}, content length: {}"
-                          , (System.nanoTime() - start) / 1_000_000.0
-                          , originalBody.length());
-                    } else {
-                      decryptedBody = originalBody;
-                    }
-
-                    // 새로운 Request Body 작성
-                    byte[] newBodyBytes = decryptedBody.getBytes(StandardCharsets.UTF_8);
-                    DataBuffer newBodyDataBuffer = exchange.getResponse()
-                            .bufferFactory()
-                            .wrap(newBodyBytes);
-
-                    // 새로운 Request 생성
-                    ServerHttpRequest mutatedRequest = exchange.getRequest()
-                            .mutate()
-                            .header("Content-Length", String.valueOf(newBodyBytes.length)) // Content-Length 재설정
-                            .build();
-
-                    ServerWebExchange mutatedExchange = exchange.mutate()
-                            .request(new ServerHttpRequestDecorator(mutatedRequest) {
-                                @Override
-                                public Flux<DataBuffer> getBody() {
-                                    return Flux.just(newBodyDataBuffer);
-                                }
-                            })
-                            .build();
-
-                    // 다음 필터 체인으로 전달
-                    return chain.filter(mutatedExchange);
+                  // 다음 필터 체인으로 전달
+                  return chain.filter(mutatedExchange);
                 });
     };
+  }
+
+  private static ServerWebExchange getServerWebExchange(ServerWebExchange exchange,
+      String requestBody) {
+    byte[] newBodyBytes = requestBody.getBytes(StandardCharsets.UTF_8);
+    DataBuffer newBodyDataBuffer = exchange.getResponse()
+            .bufferFactory()
+            .wrap(newBodyBytes);
+
+    // 새로운 Request 생성
+    ServerHttpRequest mutatedRequest = exchange.getRequest()
+            .mutate()
+            .header("Content-Length", String.valueOf(newBodyBytes.length)) // Content-Length 재설정
+            .build();
+
+    ServerWebExchange mutatedExchange = exchange.mutate()
+            .request(new ServerHttpRequestDecorator(mutatedRequest) {
+                @Override
+                public Flux<DataBuffer> getBody() {
+                    return Flux.just(newBodyDataBuffer);
+                }
+            })
+            .build();
+    return mutatedExchange;
+  }
+
+  private String messageHandle(MessageDto messageDto) {
+    String requestBody = "";
+
+    long start = System.nanoTime();
+
+    if(messageDto.isSigned()) {
+      try {
+        boolean verified = signUtil.verify(messageDto.getMessage(), messageDto.getSignature());
+
+        log.debug("Signature verified: {}", verified);
+
+        if(!verified) throw new IllegalArgumentException("Invalid signature");
+
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
+
+    if(messageDto.isEncrypted()) {
+      // Request Body 암호화
+      try {
+        requestBody = cryptoUtil.decrypt(messageDto.getMessage());
+      } catch (Exception e) {
+        log.error(e.getMessage(), e);
+        throw new IllegalArgumentException(e);
+      }
+
+      log.debug("Decrypted request body: {}", requestBody);
+    } else {
+      requestBody = messageDto.getMessage();
+    }
+
+    timeLog.info("Decrypted time(ms): {}, content length: {}"
+        , (System.nanoTime() - start) / 1_000_000.0
+        , messageDto.getMessage().length());
+
+    return requestBody;
+  }
+
+  private MessageDto getBody(List<DataBuffer> dataBuffers) {
+    StringBuilder bodyBuilder = new StringBuilder();
+    dataBuffers.forEach(dataBuffer -> {
+        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+        dataBuffer.read(bytes);
+        bodyBuilder.append(new String(bytes, StandardCharsets.UTF_8));
+    });
+
+    String originalBody = bodyBuilder.toString();
+
+    log.debug("Original body: {}", originalBody);
+
+    return MessageDto.fromJson(originalBody);
   }
 
   @Override

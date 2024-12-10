@@ -2,7 +2,9 @@ package com.chatbot.gateway.filter;
 
 import static org.springframework.cloud.gateway.support.ServerWebExchangeUtils.CLIENT_RESPONSE_CONN_ATTR;
 
+import com.chatbot.gateway.dto.MessageDto;
 import com.chatbot.gateway.util.CryptoUtil;
+import com.chatbot.gateway.util.SignUtil;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
@@ -44,16 +46,26 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
 
   private final CryptoUtil cryptoUtil;
 
+  private final SignUtil signUtil;
+
   @Value("${app.message.encrypted:false}")
   private boolean isEncrypt;
 
-  @Value("${app.server.lineseparator}")
+  @Value("${app.message.signed:false}")
+  private boolean isSign;
+
+  @Value("${app.server.lineseparator:\n}")
   private String lineSeparator;
 
-  public CryptoResponseGatewayFilterFactory(List<MediaType> streamingMediaTypes, @Value("${app.message.enc_key}") String encKey) {
+  public CryptoResponseGatewayFilterFactory(List<MediaType> streamingMediaTypes
+      , @Value("${app.message.enc_key}") String encKey
+      , @Value("${app.message.private_key}") String privateKey
+      , @Value("${app.message.public_key}") String publicKey
+  ) {
     super(Config.class);
     this.streamingMediaTypes = streamingMediaTypes;
     this.cryptoUtil = new CryptoUtil(encKey);
+    this.signUtil = new SignUtil(privateKey, publicKey);
   }
 
   @Override
@@ -84,7 +96,7 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
 
           ServerHttpResponse response = exchange.getResponse();
 
-          final Flux<DataBuffer> body = encryptBody(connection, response);
+          final Flux<DataBuffer> body = getDataBuffer(connection, response);
 
           return (isStreamingMediaType(getMediaType(response))
               ? response.writeAndFlushWith(body.map(Flux::just)) : response.writeWith(body));
@@ -106,12 +118,14 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
   }
 
   /**
+   *
+   * TODO: byteBuf 누수 확인
    * connection 으로 부터 받은 데이터를 암호화
    * @param connection
    * @param response
    * @return
    */
-  private Flux<DataBuffer> encryptBody(Connection connection, ServerHttpResponse response) {
+  private Flux<DataBuffer> getDataBuffer(Connection connection, ServerHttpResponse response) {
     StringBuffer sb = new StringBuffer();
 
     final Flux<DataBuffer> body = connection
@@ -122,66 +136,93 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
         .map(byteBuf -> { //data modify
           // Netty ByteBuf -> String 변환
           String original = byteBuf.toString(StandardCharsets.UTF_8);
-//          byteBuf.release();
 
           log.trace("Original Response Body: '{}'", original);
 
-          String encrypteData = "";
+          if(original.endsWith(lineSeparator)) {
+            //ollama로 부터 받은 데이터에 line separator가 있는 경우 암호화 문자열에서는 제거, ollama는 '\n' 으로 구분함
+            log.trace("Contain line separator.");
 
-          // 데이터 암호화
-          if(isEncrypt) {
-            encrypteData = encryptData(sb, original);
+            if(!sb.isEmpty()) {
+              log.trace("Buffered string: '{}'", sb);
+
+              original = sb + original;
+              sb.setLength(0);
+            }
+          } else {
+            //데이터 끝이 lien separator 가 없는 경우 ollama 로 부터 캐리지 리턴이 포함 될 때까지 client 에는 빈문자열을 내림
+            log.trace("Not contain line separator.");
+
+            sb.append(original);
+
+            return wrap(Unpooled.copiedBuffer("", StandardCharsets.UTF_8), response);
           }
+
+          MessageDto messageDto = handleMessage(original);
+
+          log.debug("Response messageDto: {}", messageDto);
 
           //TODO: Need data buffer
 
           // String -> DataBuffer 변환
-          return wrap(Unpooled.copiedBuffer(encrypteData, StandardCharsets.UTF_8), response);
+          return wrap(Unpooled.copiedBuffer(messageDto.toJson() + lineSeparator, StandardCharsets.UTF_8), response);
         });
 
     return body;
   }
 
-  private String encryptData(StringBuffer sb, String original) {
-    String modified = "";
+  private MessageDto handleMessage(String original) {
 
+    String encryptedData = original;
+
+    // 데이터 암호화
+    if(isEncrypt) {
+      encryptedData = encryptData(original);
+    }
+
+    String signature = "";
+
+    if(isSign) {
+      signature = signData(encryptedData);
+    }
+
+    MessageDto messageDto = new MessageDto();
+    messageDto.setEncrypted(isEncrypt);
+    messageDto.setSigned(isSign);
+    messageDto.setMessage(encryptedData);
+    messageDto.setSignature(signature);
+
+    return messageDto;
+  }
+
+  private String signData(String message) {
+    try {
+      return this.signUtil.sign(message);
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  private String encryptData(String original) {
     try {
         long start = System.nanoTime();
 
-        log.trace("Buffered string: '{}'", sb);
+        timeLog.trace("Original: '{}'", original);
 
-        //ollama로 부터 받은 데이터에 line separator가 있는 경우 암호화 문자열에서는 제거, ollama는 '\n' 으로 구분함
-        if(original.endsWith(lineSeparator)) {
-          log.trace("Contain line separator.");
-
-          if(!sb.isEmpty()) {
-            original = sb + original;
-            sb.setLength(0);
-          }
-
-          timeLog.trace("Original: '{}'", original);
-
-          modified = cryptoUtil.encrypt(removeLineSeparator(original)) + lineSeparator;
-        } else {
-          log.trace("Not contain line separator.");
-
-          sb.append(original);
-
-          //데이터 끝이 lien separator 가 없는 경우 ollama 로 부터 캐리지 리턴이 포함 될 때까지 client 에는 빈문자열을 내림
-          return "";
-        }
+        String modified = cryptoUtil.encrypt(removeLineSeparator(original));
 
         timeLog.info("Encrypted time(ms): {}, content size: {}"
             , (System.nanoTime() - start) / 1_000_000.0
             , original.length());
 
         log.debug("Encrypted response body: '{}'", modified);
+
+        return modified;
     } catch (Exception e) {
       // TODO: error handling
       log.error("Response data encrypted file.", e);
       throw new RuntimeException(e);
     }
-    return modified;
   }
 
   private String removeLineSeparator(String original) {
