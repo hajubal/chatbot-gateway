@@ -24,6 +24,8 @@ public class MetricsFilter implements GlobalFilter, Ordered {
 
   @Override
   public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+    meterRegistry.counter("gateway.requests.total").increment();
+
     Timer.Sample sample = Timer.start(meterRegistry);
 
     return chain.filter(exchange)

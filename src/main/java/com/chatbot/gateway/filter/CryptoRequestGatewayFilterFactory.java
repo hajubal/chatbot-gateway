@@ -3,10 +3,12 @@ package com.chatbot.gateway.filter;
 import com.chatbot.gateway.dto.MessageDto;
 import com.chatbot.gateway.util.CryptoUtil;
 import com.chatbot.gateway.util.SignUtil;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,8 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
 
   private final MeterRegistry meterRegistry;
 
+  private final AtomicLong contentLength = new AtomicLong(0);
+
   public CryptoRequestGatewayFilterFactory(MeterRegistry meterRegistry
       , @Value("${app.message.enc_key}") String encKey
       , @Value("${app.message.private_key}") String privateKey
@@ -48,6 +52,9 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
     this.cryptoUtil = new CryptoUtil(encKey);
     this.signUtil = new SignUtil(privateKey, publicKey);
     this.meterRegistry = meterRegistry;
+
+    Gauge.builder("gateway.request.content.length", contentLength,
+        AtomicLong::get).register(meterRegistry);
   }
 
   @Override
@@ -141,15 +148,12 @@ public class CryptoRequestGatewayFilterFactory extends AbstractGatewayFilterFact
         , (System.nanoTime() - start) / 1_000_000.0
         , messageDto.getMessage().length());
 
-//    meterRegistry.gauge("gateway.request.processing.time"
-//        , (System.nanoTime() - start) / 1_000_000.0);
-
     sample.stop(
         Timer.builder("gateway.request.processing.time")
             .register(meterRegistry)
     );
 
-    meterRegistry.gauge("gateway.request.content.length", messageDto.getMessage().length());
+    contentLength.set(messageDto.getMessage().length());
 
     return requestBody;
   }

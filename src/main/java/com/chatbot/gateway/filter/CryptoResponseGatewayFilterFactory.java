@@ -5,13 +5,14 @@ import static org.springframework.cloud.gateway.support.ServerWebExchangeUtils.C
 import com.chatbot.gateway.dto.MessageDto;
 import com.chatbot.gateway.util.CryptoUtil;
 import com.chatbot.gateway.util.SignUtil;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +63,8 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
 
   private final MeterRegistry meterRegistry;
 
+  private final AtomicLong contentLength = new AtomicLong(0);
+
   public CryptoResponseGatewayFilterFactory(List<MediaType> streamingMediaTypes
       , MeterRegistry meterRegistry
       , @Value("${app.message.enc_key}") String encKey
@@ -73,6 +76,9 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
     this.cryptoUtil = new CryptoUtil(encKey);
     this.signUtil = new SignUtil(privateKey, publicKey);
     this.meterRegistry = meterRegistry;
+
+    Gauge.builder("gateway.response.content.length", contentLength, AtomicLong::get)
+        .register(meterRegistry);
   }
 
   @Override
@@ -208,8 +214,7 @@ public class CryptoResponseGatewayFilterFactory extends AbstractGatewayFilterFac
             .register(meterRegistry)
     );
 
-    meterRegistry.gauge("gateway.response.content.length",
-        original.length());
+    contentLength.set(original.length());
 
     MessageDto messageDto = new MessageDto();
     messageDto.setEncrypted(isEncrypt);
