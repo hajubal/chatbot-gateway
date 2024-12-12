@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: qateway-end
+  cloud:
+    gateway:
+      routes:
+        - id: default-route
+          uri: http://localhost:11434
+          predicates:
+            - Path=/**
+
+server:
+  port: 8071
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus,health,info,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+logging:
+  level:
+    root: INFO

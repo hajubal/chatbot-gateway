@@ -14,7 +14,7 @@ spring:
 #            - name: Test2Filter
 
 host:
-  url: http://localhost:11434
+  url: http://localhost:8071
 
 app:
   server:
