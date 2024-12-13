@@ -1,6 +1,10 @@
 package com.chatbot.proxy.start;
 
+import com.chatbot.proxy.util.TimeUtil;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -11,8 +15,10 @@ import reactor.core.publisher.Mono;
 @Component
 public class StartFilter implements GlobalFilter, Ordered {
 
+  private final MeterRegistry meterRegistry;
 
-  public StartFilter() {
+  public StartFilter(MeterRegistry meterRegistry) {
+    this.meterRegistry = meterRegistry;
   }
 
   @Override
@@ -22,6 +28,8 @@ public class StartFilter implements GlobalFilter, Ordered {
 
     // 현재 시간 기록
     long startTime = System.currentTimeMillis();
+
+    System.out.println("StartFilter.: " + TimeUtil.convert(System.currentTimeMillis()));
 
     // 요청 헤더에 상관관계 ID와 시작 시간 추가
     ServerWebExchange modifiedExchange = exchange.mutate()
@@ -33,7 +41,25 @@ public class StartFilter implements GlobalFilter, Ordered {
         )
         .build();
 
-    return chain.filter(modifiedExchange);
+    return chain.filter(modifiedExchange)
+        .doOnSuccess(v -> {
+          // Response Header에 값 추가
+          String endCorrelationId = exchange.getResponse().getHeaders().getFirst("X-Correlation-ID");
+          String endTimeStr = exchange.getResponse().getHeaders().getFirst("X-End-Time");
+
+          System.out.println("StartFilter doOnSuccess.: " + TimeUtil.convert(System.currentTimeMillis()));
+
+          if (endCorrelationId != null && endTimeStr != null) {
+            long endTime = Long.parseLong(endTimeStr);
+            long totalProcessingTime = System.currentTimeMillis() - endTime;
+
+            // 메트릭 기록
+            Timer.builder("gateway.response.proxy.time")
+    //          .tag("correlation_id", correlationId)
+                .register(meterRegistry)
+                .record(totalProcessingTime, TimeUnit.MILLISECONDS);
+          }
+    });
   }
 
   @Override
